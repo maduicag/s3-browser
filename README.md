@@ -27,6 +27,13 @@ Works with any **S3-compatible storage**, including:
 git clone https://github.com/maduicag/s3-browser.git
 cd s3-browser
 
+2. Run the application:
+python app.py
+
+3. Open your browser:
+
+http://localhost:5000
+
 
 2. Run the application:
 python app.py
