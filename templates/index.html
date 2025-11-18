@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>S3 Browser</title>
+    <style>
+        /* ----------------------------
+           Global Styles
+        ---------------------------- */
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            margin-bottom: 10px;
+        }
+
+        /* ----------------------------
+           Top Bar (Header)
+        ---------------------------- */
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* ----------------------------
+           Inputs & Buttons
+        ---------------------------- */
+        select, input {
+            padding: 8px;
+            margin: 5px 0;
+            width: 300px;
+        }
+        button {
+            padding: 8px 20px;
+            margin-left: 10px;
+            background: #1d72b8;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background: #155d91;
+        }
+        #backButton {
+            background: #888;
+        }
+        #backButton:hover {
+            background: #555;
+        }
+
+        /* ----------------------------
+           Table Styles
+        ---------------------------- */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+        }
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        tr:hover {
+            background: #f2f2f2;
+        }
+        .folder {
+            font-weight: bold;
+            color: #1d72b8;
+            cursor: pointer;
+        }
+        .object {
+            color: #444;
+        }
+        #loadMore {
+            background: #444;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ----------------------------
+     Header / Top Bar
+---------------------------- -->
+<div class="top-bar">
+    <h1>S3 Browser</h1>
+    <div>
+        <a href="/logout"><button>Logout</button></a>
+    </div>
+</div>
+
+<!-- ----------------------------
+     Bucket Selector
+---------------------------- -->
+<label><b>Select bucket</b></label><br>
+<select id="bucketSelect">
+    <option disabled selected value="">-- choose bucket --</option>
+    {% for b in buckets %}
+        <option value="{{ b.Name }}">{{ b.Name }}</option>
+    {% endfor %}
+</select>
+
+<br><br>
+
+<!-- ----------------------------
+     Search & Back Buttons
+---------------------------- -->
+<label><b>Search objects</b></label><br>
+<input type="text" id="searchBox" placeholder="Type prefix/path..." />
+<button onclick="performSearch()">Search</button>
+<button id="backButton" onclick="goBack()">Back</button>
+
+<br><br>
+
+<!-- ----------------------------
+     Current Path Display
+---------------------------- -->
+<div id="currentPath"><b>Path:</b> /</div>
+
+<!-- ----------------------------
+     Objects / Folders Table
+---------------------------- -->
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Size</th>
+            <th>Last Modified</th>
+            <th>Download</th>
+        </tr>
+    </thead>
+    <tbody id="results"></tbody>
+</table>
+
+<!-- Load More Button -->
+<button id="loadMore" style="display:none;" onclick="loadMore()">Load More</button>
+
+<script>
+/* ----------------------------
+   JS Variables
+---------------------------- */
+let currentBucket = "";
+let currentPrefix = "";
+let nextCursor = null;
+
+/* ----------------------------
+   Event: Bucket Selection
+---------------------------- */
+document.getElementById("bucketSelect").addEventListener("change", () => {
+    currentBucket = document.getElementById("bucketSelect").value;
+    currentPrefix = "";
+    nextCursor = null;
+    document.getElementById("currentPath").innerHTML = "<b>Path:</b> /";
+    loadObjects();
+});
+
+/* ----------------------------
+   Load Objects / Folders
+---------------------------- */
+function loadObjects(loadMoreMode = false) {
+    if (!currentBucket) return;
+
+    let url = `/objects?bucket=${currentBucket}&prefix=${currentPrefix}`;
+    if (loadMoreMode && nextCursor) url += `&cursor=${nextCursor}`;
+
+    fetch(url)
+        .then(res => res.json())
+        .then(data => {
+            if (!loadMoreMode) document.getElementById("results").innerHTML = "";
+
+            nextCursor = data.next_cursor;
+            document.getElementById("loadMore").style.display = nextCursor ? "block" : "none";
+
+            data.objects.forEach(obj => {
+                let name = obj.Key.replace(currentPrefix, "");
+                if (name.endsWith("/")) {
+                    // Folder row
+                    document.getElementById("results").innerHTML += `
+                        <tr class="folder" onclick="enterFolder('${obj.Key}')">
+                            <td>${name}</td>
+                            <td>—</td>
+                            <td>—</td>
+                            <td></td>
+                        </tr>`;
+                } else {
+                    // File row
+                    document.getElementById("results").innerHTML += `
+                        <tr class="object">
+                            <td>${name}</td>
+                            <td>${obj.Size}</td>
+                            <td>${obj.LastModified}</td>
+                            <td><a href="/download?bucket=${currentBucket}&key=${obj.Key}">
+                                  <button>Download</button>
+                                </a>
+                            </td>
+                        </tr>`;
+                }
+            });
+        });
+}
+
+/* ----------------------------
+   Enter Folder
+---------------------------- */
+function enterFolder(prefix) {
+    currentPrefix = prefix;
+    nextCursor = null;
+    document.getElementById("currentPath").innerHTML = `<b>Path:</b> /${currentPrefix}`;
+    loadObjects();
+}
+
+/* ----------------------------
+   Back Button Logic
+---------------------------- */
+function goBack() {
+    if (!currentPrefix) return; // Already at root
+
+    let parts = currentPrefix.split("/");
+    parts.pop(); // Remove trailing empty element
+    parts.pop(); // Remove last folder
+
+    currentPrefix = parts.length ? parts.join("/") + "/" : "";
+    nextCursor = null;
+    document.getElementById("currentPath").innerHTML = `<b>Path:</b> /${currentPrefix}`;
+    loadObjects();
+}
+
+/* ----------------------------
+   Load More Objects (Pagination)
+---------------------------- */
+function loadMore() {
+    loadObjects(true);
+}
+
+/* ----------------------------
+   Search Objects by Prefix
+---------------------------- */
+function performSearch() {
+    let q = document.getElementById("searchBox").value.trim();
+    if (!q || !currentBucket) return;
+
+    fetch(`/search?bucket=${currentBucket}&q=${q}`)
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById("results").innerHTML = "";
+            nextCursor = null;
+            document.getElementById("loadMore").style.display = "none";
+
+            data.forEach(obj => {
+                let name = obj.Key;
+                document.getElementById("results").innerHTML += `
+                    <tr class="object">
+                        <td>${name}</td>
+                        <td>${obj.Size}</td>
+                        <td>${obj.LastModified}</td>
+                        <td><a href="/download?bucket=${currentBucket}&key=${obj.Key}">
+                              <button>Download</button>
+                            </a>
+                        </td>
+                    </tr>`;
+            });
+        });
+}
+</script>
+
+</body>
+</html>

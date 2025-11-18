@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 8px;
+            box-shadow: 0px 0px 10px rgba(0,0,0,0.2);
+            width: 350px;
+        }
+        .login-container h2 {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .login-container label {
+            display: block;
+            margin-top: 10px;
+        }
+        .login-container input, .login-container select {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .login-container button {
+            width: 100%;
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #1d72b8;
+            border: none;
+            color: white;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .login-container button:hover {
+            background-color: #155d91;
+        }
+        .error {
+            color: #a94442;
+            background: #f2dede;
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h2>S3 Login</h2>
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+        <form action="/login" method="post">
+
+            <label>Endpoint</label>
+            <select id="endpointSelect" onchange="updateEndpoint()">
+                <option value="ip_endpoint">https://ip_endpoint:443/ (region)</option>
+        /*here you can add as many endpoints as you need to make it easier to use */
+            </select>
+            <input type="hidden" id="endpointInput" name="endpoint" value="https://ip_endpoint:443/">
+
+            <label>Access Key</label>
+            <input type="text" name="access_key" placeholder="Your Access Key" required>
+
+            <label>Secret Key</label>
+            <input type="password" name="secret_key" placeholder="Your Secret Key" required>
+
+            <button type="submit">Login</button>
+        </form>
+    </div>
+
+    <script>
+        function updateEndpoint() {
+            const select = document.getElementById('endpointSelect');
+            const ip = select.value;
+            document.getElementById('endpointInput').value = `https://${ip}:443/`;
+        }
+    </script>
+</body>
+</html>
