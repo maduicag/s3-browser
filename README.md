@@ -2,6 +2,7 @@
 
 A lightweight **web-based S3 browser** built with Flask and Boto3. Browse buckets, navigate directories, search objects, **upload and download files** from S3-compatible storage.
 
+Dockerhub: https://hub.docker.com/r/maduica/s3arch
 ---
 
 ## Features
