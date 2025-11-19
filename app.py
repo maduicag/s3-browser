@@ -2,13 +2,26 @@ from flask import Flask, render_template, request, redirect, session, jsonify, s
 import boto3
 from botocore.config import Config
 from io import BytesIO
+import os
+
+import logging
+
+# Configure logging to file and console
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("s3browser.log"), logging.StreamHandler()]
+)
+
+logger = logging.getLogger(__name__)
 
 # ----------------------------
 # Flask App Configuration
 # ----------------------------
 app = Flask(__name__)
 # NOTE: Change this secret key before production!
-app.secret_key = "super-secret-key-change-this"  
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super-secret-key-change-this")
 
 # ----------------------------
 # Helper: Create S3 Client
@@ -23,9 +36,9 @@ def get_s3():
 
     return boto3.client(
         "s3",
-        endpoint_url=session["endpoint"],
-        aws_access_key_id=session["access_key"],
-        aws_secret_access_key=session["secret_key"],
+        endpoint_url=session.get("endpoint"),
+        aws_access_key_id=session.get("access_key"),
+        aws_secret_access_key=session.get("secret_key"),
         config=Config(signature_version="s3v4")
     )
 
@@ -43,9 +56,9 @@ def login():
         return render_template("login.html")
 
     # Retrieve form data
-    endpoint = request.form.get("endpoint").strip()
-    access_key = request.form.get("access_key").strip()
-    secret_key = request.form.get("secret_key").strip()
+    endpoint = request.form.get("endpoint", "").strip()
+    access_key = request.form.get("access_key", "").strip()
+    secret_key = request.form.get("secret_key", "").strip()
 
     # Test provided credentials
     try:
@@ -107,7 +120,7 @@ def objects():
     """
     s3 = get_s3()
     if not s3:
-        return redirect("/login")
+        return jsonify({"error": "not logged in"}), 401
 
     bucket = request.args.get("bucket")
     prefix = request.args.get("prefix", "")
@@ -118,7 +131,10 @@ def objects():
     if cursor:
         params["ContinuationToken"] = cursor
 
-    result = s3.list_objects_v2(**params)
+    try:
+        result = s3.list_objects_v2(**params)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     return jsonify({
         "objects": result.get("Contents", []),
@@ -136,7 +152,7 @@ def search():
     """
     s3 = get_s3()
     if not s3:
-        return redirect("/login")
+        return jsonify({"error": "not logged in"}), 401
 
     bucket = request.args.get("bucket")
     q = request.args.get("q", "")
@@ -144,7 +160,10 @@ def search():
     if not q:
         return jsonify([])
 
-    result = s3.list_objects_v2(Bucket=bucket, Prefix=q)
+    try:
+        result = s3.list_objects_v2(Bucket=bucket, Prefix=q)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     return jsonify(result.get("Contents", []))
 
@@ -163,8 +182,11 @@ def download():
     bucket = request.args.get("bucket")
     key = request.args.get("key")
 
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    data = obj["Body"].read()
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        data = obj["Body"].read()
+    except Exception as e:
+        return "Error fetching object: {}".format(str(e)), 500
 
     return send_file(
         BytesIO(data),
@@ -173,9 +195,104 @@ def download():
     )
 
 # ----------------------------
+# UPLOAD ROUTE
+# ----------------------------
+
+
+from io import BytesIO
+from boto3.s3.transfer import TransferConfig
+
+def get_s3_for_upload():
+    """
+    Returns a boto3 client configured specifically for uploads to Ceph RGW.
+    """
+    if "access_key" not in session:
+        return None
+
+    from botocore.client import Config
+
+    return boto3.client(
+        "s3",
+        endpoint_url=session.get("endpoint"),
+        aws_access_key_id=session.get("access_key"),
+        aws_secret_access_key=session.get("secret_key"),
+        config=Config(signature_version="s3")  # S3 v2 semnătura, compatibil Ceph
+    )
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    s3 = get_s3_for_upload()
+    if not s3:
+        return jsonify({"error": "not logged in"}), 401
+
+    file = request.files.get("file")
+    bucket = request.form.get("bucket")
+    prefix = request.form.get("prefix", "")
+    key = prefix + file.filename
+
+    if not file or not bucket:
+        return jsonify({"error": "file or bucket missing"}), 400
+
+    try:
+        # Citim fișierul în memorie
+        content = file.read()
+        file_size = len(content)
+        file_stream = BytesIO(content)
+
+        logging.info(f"Uploading file {file.filename} to bucket {bucket}, key {key}, size {file_size} bytes")
+
+        # TransferConfig optional, dar nu e strict necesar pentru fișiere mici
+        config = TransferConfig(
+            multipart_threshold=5*1024*1024,
+            multipart_chunksize=5*1024*1024
+        )
+
+        # Reset pointer
+        file_stream.seek(0)
+        s3.upload_fileobj(
+            Fileobj=file_stream,
+            Bucket=bucket,
+            Key=key,
+            Config=config
+        )
+
+        logging.info(f"Upload successful for {file.filename}")
+        return jsonify({"success": True, "key": key}), 200
+
+    except Exception as e:
+        logging.error(f"Upload failed for {file.filename}: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+# ----------------------------
+# DELETE ROUTE
+# ----------------------------
+@app.route("/delete", methods=["POST"])
+def delete():
+    """
+    Delete a file from the specified bucket.
+    Expects form-data: bucket, key
+    """
+    s3 = get_s3()
+    if not s3:
+        return jsonify({"error": "not logged in"}), 401
+
+    bucket = request.form.get("bucket")
+    key = request.form.get("key")
+
+    if not bucket or not key:
+        return jsonify({"error": "bucket and key are required"}), 400
+
+    try:
+        s3.delete_object(Bucket=bucket, Key=key)
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ----------------------------
 # RUN APP
 # ----------------------------
 if __name__ == "__main__":
     # Flask runs in debug mode by default for development
     # Change host/port as needed for production
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5001, debug=True)
